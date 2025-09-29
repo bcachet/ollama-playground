@@ -16,40 +16,46 @@ RUN dnf install -y cloud-init \
       && \
       ln -s ../cloud-init.target /usr/lib/systemd/system/default.target.wants
 
-#! Install rpmfusion free and nonfree repo's for access to the nvidia drivers
-RUN dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
-RUN dnf install -y https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+#=================================
+# NVIDIA Drivers and NVIDIA Container Toolkit
+#=================================
+RUN <<EOF
+dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
+dnf install -y https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
 
-#! Install the kernel devel and kernel header tools
-#! We get the kernel that is being used in THE BASE IMAGE by doing /usr/lib/modules && echo *, then we install the kernel-devel for that kernel
-#! SOMETIMES this messes up if the "base" image has an outdated kernel vs the one you get from dnf
-RUN dnf install -y kernel-devel-$(cd /usr/lib/modules && echo *)
+# Install the kernel devel and kernel header tools
+# We get the kernel that is being used in THE BASE IMAGE by doing /usr/lib/modules && echo *, then we install the kernel-devel for that kernel
+# SOMETIMES this messes up if the "base" image has an outdated kernel vs the one you get from dnf
+dnf install -y kernel-devel-$(cd /usr/lib/modules && echo *)
 
-#! Install the nvidia drivers
-RUN dnf install -y akmod-nvidia xorg-x11-drv-nvidia-cuda
+# Install the nvidia drivers
+dnf install -y akmod-nvidia xorg-x11-drv-nvidia-cuda
 
-#! Install NVIDIA container toolkit
-RUN curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | tee /etc/yum.repos.d/nvidia-container-toolkit.repo && \
-    dnf install -y nvidia-container-toolkit
+# Install NVIDIA container toolkit
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | tee /etc/yum.repos.d/nvidia-container-toolkit.repo
+dnf install -y nvidia-container-toolkit
 
-#! Blacklist the nouveau driver to ensure NVIDIA drivers function properly
-RUN echo "blacklist nouveau" > /etc/modprobe.d/blacklist_nouveau.conf
+# Blacklist the nouveau driver to ensure NVIDIA drivers function properly
+echo "blacklist nouveau" > /etc/modprobe.d/blacklist_nouveau.conf
 
-#! See: "Kernel Open" on:
-#! https://rpmfusion.org/Howto/NVIDIA?highlight=%28%5CbCategoryHowto%5Cb%29
-#! Starting 515xx and above, to support the 5000 series and newer cards, the kernel needs to be "open" to allow the nvidia drivers to work when compiling with akmods.
-RUN sh -c 'echo "%_with_kmod_nvidia_open 1" > /etc/rpm/macros.nvidia-kmod'
+# See: "Kernel Open" on:
+# https://rpmfusion.org/Howto/NVIDIA?highlight=%28%5CbCategoryHowto%5Cb%29
+# Starting 515xx and above, to support the 5000 series and newer cards, the kernel needs to be "open" to allow the nvidia drivers to work when compiling with akmods.
+sh -c 'echo "%_with_kmod_nvidia_open 1" > /etc/rpm/macros.nvidia-kmod'
 
-#! Add `options nvidia NVreg_OpenRmEnableUnsupportedGpus=1` to /etc/modprobe.d/nvidia.conf
-#! which will enable the 5000 series GPUs to work with the nvidia drivers.
-RUN echo "options nvidia NVreg_OpenRmEnableUnsupportedGpus=1" > /etc/modprobe.d/nvidia.conf
+# Add `options nvidia NVreg_OpenRmEnableUnsupportedGpus=1` to /etc/modprobe.d/nvidia.conf
+# which will enable the 5000 series GPUs to work with the nvidia drivers.
+echo "options nvidia NVreg_OpenRmEnableUnsupportedGpus=1" > /etc/modprobe.d/nvidia.conf
+EOF
 
-#! Build kmods which runs on boot.
-#! The reasoning for the script is that sometimes the kernel version is different on the base images vs what is actually on 
-#! dnf update, so we have to "fake it till you make it" scenario.
-RUN dnf install -y dkms
+# Build kmods which runs on boot.
+# The reasoning for the script is that sometimes the kernel version is different on the base images vs what is actually on 
+# dnf update, so we have to "fake it till you make it" scenario.
 COPY --chmod=0755 dkms.sh /tmp
-RUN /tmp/dkms.sh
+RUN <<EOF
+dnf install -y dkms
+/tmp/dkms.sh
+EOF
 
 
 #=================================
@@ -78,6 +84,7 @@ RUN dnf clean all && \
 #=================================
 # Service to generate /etc/cdi/nvidia.yaml on first boot
 # See https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support
+RUN mkdir -p /etc/cdi
 COPY <<EOF /usr/lib/systemd/system/nvidia-toolkit-firstboot.service
 [Unit]
 # For more information see https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html
@@ -90,8 +97,7 @@ Before=podman-restart.service podman.service
 
 [Service]
 Type=oneshot
-ExecStart=-/usr/bin/mkdir -p /etc/cdi
-ExecStart=/usr/bin/nvidia-ctk cdi generate > /etc/cdi/nvidia.yaml
+ExecStart=/bin/bash -c '/usr/bin/nvidia-ctk cdi generate | tee /etc/cdi/nvidia.yaml'
 RemainAfterExit=yes
 TimeoutStartSec=300
 
@@ -100,6 +106,6 @@ WantedBy=basic.target
 
 EOF
 
-#! Enable necessary services to be started at boot
+# Enable necessary services to be started at boot
 RUN systemctl enable nvidia-toolkit-firstboot.service
 
