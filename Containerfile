@@ -70,6 +70,7 @@ EOH
 install -Dm0755 /tmp/fake-uname /tmp/bin/uname
 
 PATH=/tmp/bin:$PATH dkms autoinstall -k ${KERNEL_VERSION}
+rm -f /tmp/fake-uname /tmp/bin/uname
 EOF
 
 
